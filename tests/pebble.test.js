@@ -2,10 +2,11 @@
 
 var request = require('supertest');
 var should = require('should');
+var language = require('../lib/language')();
 
 //Mocked ctx
 var ctx = {};
-var env = {};
+// var env = {}; Unused variable
 var now = Date.now();
 
 function updateMills (entries) {
@@ -17,10 +18,10 @@ function updateMills (entries) {
   return entries;
 }
 
-ctx.data = require('../lib/data')(env, ctx);
-ctx.data.sgvs = updateMills([
+ctx.ddata = require('../lib/data/ddata')();
+ctx.ddata.sgvs = updateMills([
   { device: 'dexcom',
-    y: 91,
+    mgdl: 91,
     direction: 'Flat',
     type: 'sgv',
     filtered: 124048,
@@ -29,7 +30,7 @@ ctx.data.sgvs = updateMills([
     noise: 1
   }
   , { device: 'dexcom',
-    y: 88,
+    mgdl: 88,
     direction: 'Flat',
     type: 'sgv',
     filtered: 120464,
@@ -38,7 +39,7 @@ ctx.data.sgvs = updateMills([
     noise: 1
   }
   , { device: 'dexcom',
-    y: 86,
+    mgdl: 86,
     direction: 'Flat',
     type: 'sgv',
     filtered: 117808,
@@ -47,7 +48,7 @@ ctx.data.sgvs = updateMills([
     noise: 1
   }
   , { device: 'dexcom',
-    y: 84,
+    mgdl: 92,
     direction: 'Flat',
     type: 'sgv',
     filtered: 115680,
@@ -56,7 +57,7 @@ ctx.data.sgvs = updateMills([
     noise: 1
   }
   , { device: 'dexcom',
-    y: 82,
+    mgdl: 90,
     direction: 'Flat',
     type: 'sgv',
     filtered: 113984,
@@ -66,7 +67,7 @@ ctx.data.sgvs = updateMills([
   }
 ]);
 
-ctx.data.cals = updateMills([
+ctx.ddata.cals = updateMills([
   { device: 'dexcom',
     slope: 895.8571693029189,
     intercept: 34281.06876195567,
@@ -75,22 +76,28 @@ ctx.data.cals = updateMills([
   }
 ]);
 
-ctx.data.profiles = [{dia: 4 }];
+ctx.ddata.profiles = [{dia: 4, sens: 70, carbratio: 15, carbs_hr: 30}];
 
-ctx.data.treatments = updateMills([
+ctx.ddata.treatments = updateMills([
   { eventType: 'Snack Bolus', insulin: '1.50', carbs: '22' }
 ]);
 
-ctx.data.devicestatus.uploaderBattery = 100;
+ctx.ddata.devicestatus = [{uploader: {battery: 100}}];
 
+var bootevent = require('../lib/server/bootevent');
 describe('Pebble Endpoint', function ( ) {
-  var pebble = require('../lib/pebble');
+  var pebble = require('../lib/server/pebble');
   before(function (done) {
     var env = require('../env')( );
+    env.settings.authDefaultRoles = 'readable';
     this.app = require('express')( );
     this.app.enable('api');
-    this.app.use('/pebble', pebble(env, ctx));
-    done();
+    var self = this;
+    bootevent(env, language).boot(function booted (context) {
+      context.ddata = ctx.ddata.clone( );
+      self.app.use('/pebble', pebble(env, context));
+      done();
+    });
   });
 
   it('/pebble default(1) count', function (done) {
@@ -101,7 +108,7 @@ describe('Pebble Endpoint', function ( ) {
         var bgs = res.body.bgs;
         bgs.length.should.equal(1);
         var bg = bgs[0];
-        bg.sgv.should.equal('82');
+        bg.sgv.should.equal('90');
         bg.bgdelta.should.equal(-2);
         bg.trend.should.equal(4);
         bg.direction.should.equal('Flat');
@@ -111,6 +118,7 @@ describe('Pebble Endpoint', function ( ) {
         should.not.exist(bg.noise);
         should.not.exist(bg.rssi);
         should.not.exist(bg.iob);
+        should.not.exist(bg.cob);
         bg.battery.should.equal('100');
 
         res.body.cals.length.should.equal(0);
@@ -126,8 +134,8 @@ describe('Pebble Endpoint', function ( ) {
         var bgs = res.body.bgs;
         bgs.length.should.equal(1);
         var bg = bgs[0];
-        bg.sgv.should.equal('4.6');
-        bg.bgdelta.should.equal(-0.1);
+        bg.sgv.should.equal('5.0');
+        bg.bgdelta.should.equal('-0.1');
         bg.trend.should.equal(4);
         bg.direction.should.equal('Flat');
         bg.datetime.should.equal(now);
@@ -150,7 +158,7 @@ describe('Pebble Endpoint', function ( ) {
         var bgs = res.body.bgs;
         bgs.length.should.equal(2);
         var bg = bgs[0];
-        bg.sgv.should.equal('82');
+        bg.sgv.should.equal('90');
         bg.bgdelta.should.equal(-2);
         bg.trend.should.equal(4);
         bg.direction.should.equal('Flat');
@@ -165,20 +173,71 @@ describe('Pebble Endpoint', function ( ) {
         done( );
       });
   });
+
+  it('/pebble without battery', function (done) {
+    ctx.ddata.devicestatus = [];
+    request(this.app)
+      .get('/pebble')
+      .expect(200)
+      .end(function (err, res)  {
+        var bgs = res.body.bgs;
+        bgs.length.should.equal(1);
+        should.not.exist(bgs[0].battery);
+
+        res.body.cals.length.should.equal(0);
+        done( );
+      });
+  });
+
+  it('/pebble with a negative battery', function (done) {
+    ctx.ddata.devicestatus = [{uploader: {battery: -1}}];
+    request(this.app)
+      .get('/pebble')
+      .expect(200)
+      .end(function (err, res)  {
+        var bgs = res.body.bgs;
+        bgs.length.should.equal(1);
+        should.not.exist(bgs[0].battery);
+
+        res.body.cals.length.should.equal(0);
+        done( );
+      });
+  });
+
+  it('/pebble with a false battery', function (done) {
+    ctx.ddata.devicestatus = [{uploader: {battery: false}}];
+    request(this.app)
+      .get('/pebble')
+      .expect(200)
+      .end(function (err, res)  {
+        var bgs = res.body.bgs;
+        bgs.length.should.equal(1);
+        should.not.exist(bgs[0].battery);
+
+        res.body.cals.length.should.equal(0);
+        done( );
+      });
+  });
 });
 
-describe('Pebble Endpoint with Raw and IOB', function ( ) {
-  var pebbleRaw = require('../lib/pebble');
+describe('Pebble Endpoint with Raw and IOB and COB', function ( ) {
+  var pebbleRaw = require('../lib/server/pebble');
   before(function (done) {
-    var envRaw = require('../env')( );
-    envRaw.enable = 'rawbg iob';
+    var env = require('../env')( );
+    env.settings.enable = ['rawbg', 'iob', 'cob'];
+    env.settings.authDefaultRoles = 'readable';
     this.appRaw = require('express')( );
     this.appRaw.enable('api');
-    this.appRaw.use('/pebble', pebbleRaw(envRaw, ctx));
-    done();
+    var self = this;
+    bootevent(env, language).boot(function booted (context) {
+      context.ddata = ctx.ddata.clone( );
+      self.appRaw.use('/pebble', pebbleRaw(env, context));
+      done();
+    });
   });
 
   it('/pebble', function (done) {
+    ctx.ddata.devicestatus = [{uploader: {battery: 100}}];
     request(this.appRaw)
       .get('/pebble?count=2')
       .expect(200)
@@ -186,7 +245,7 @@ describe('Pebble Endpoint with Raw and IOB', function ( ) {
         var bgs = res.body.bgs;
         bgs.length.should.equal(2);
         var bg = bgs[0];
-        bg.sgv.should.equal('82');
+        bg.sgv.should.equal('90');
         bg.bgdelta.should.equal(-2);
         bg.trend.should.equal(4);
         bg.direction.should.equal('Flat');
@@ -195,6 +254,8 @@ describe('Pebble Endpoint with Raw and IOB', function ( ) {
         bg.unfiltered.should.equal(111920);
         bg.noise.should.equal(1);
         bg.battery.should.equal('100');
+        bg.iob.should.equal('1.50');
+        bg.cob.should.equal(22);
 
         res.body.cals.length.should.equal(1);
         var cal = res.body.cals[0];
@@ -202,6 +263,37 @@ describe('Pebble Endpoint with Raw and IOB', function ( ) {
         cal.intercept.toFixed(3).should.equal('34281.069');
         cal.scale.should.equal(1);
         done( );
+      });
+  });
+
+  it('/pebble with no treatments', function (done) {
+    ctx.ddata.treatments = [];
+    request(this.appRaw)
+      .get('/pebble')
+      .expect(200)
+      .end(function (err, res)  {
+        var bgs = res.body.bgs;
+        bgs.length.should.equal(1);
+        var bg = bgs[0];
+        bg.iob.should.equal(0);
+        bg.cob.should.equal(0);
+        done();
+      });
+  });
+
+  it('/pebble with IOB from devicestatus', function (done) {
+    ctx.ddata.treatments = [];
+    ctx.ddata.devicestatus = updateMills([{pump: {iob: {bolusiob: 2.3}}}]);
+    request(this.appRaw)
+      .get('/pebble')
+      .expect(200)
+      .end(function (err, res)  {
+        var bgs = res.body.bgs;
+        bgs.length.should.equal(1);
+        var bg = bgs[0];
+        bg.iob.should.equal('2.30');
+        bg.cob.should.equal(0);
+        done();
       });
   });
 
